@@ -27,26 +27,89 @@ static char *encode_int(int value, int length, char *destination);
 static int encodeDC(float r, float g, float b);
 static int encodeAC(float r, float g, float b, float maximumValue);
 
+void buildCosCache(int components, int size, float * cache) {
+  for (int i = 0; i < size; ++i) {
+    double xf = M_PI * i / size;
+    for (int c = 0; c < components; ++c) {
+      cache[i * components + c] = cos(xf * c);
+    }
+  }
+}
+
 const char *blurHashForPixels(int xComponents, int yComponents, int width, int height, uint8_t *rgb, int64_t bytesPerRow) {
 	static char buffer[2 + 4 + (9 * 9 - 1) * 2 + 1];
+	buffer[0] = '\0';
 
 	if(xComponents < 1 || xComponents > 9) return NULL;
 	if(yComponents < 1 || yComponents > 9) return NULL;
 
 	float *factors = calloc(yComponents * xComponents * 3, sizeof(float));
-	if(factors == NULL) {
-		buffer[0] = '\0';
-		return buffer;
+	if(factors == NULL) return buffer;
+	
+
+	float srgb_to_linear_table[256];
+	for(int i = 0; i< 256;++i){
+		srgb_to_linear_table[i] = sRGBToLinear(i);
 	}
 
-	for(int y = 0; y < yComponents; y++) {
-		for(int x = 0; x < xComponents; x++) {
-			float *factor = multiplyBasisFunction(x, y, width, height, rgb, bytesPerRow);
-			factors[(y * xComponents + x) * 3 + 0] = factor[0];
-			factors[(y * xComponents + x) * 3 + 1] = factor[1];
-			factors[(y * xComponents + x) * 3 + 2] = factor[2];
+	
+	float * restrict xf_cos_cache = (float *)malloc(xComponents * width * sizeof(float));
+	if(xf_cos_cache == NULL) return buffer;
+	float * restrict yf_cos_cache = (float *)malloc(yComponents * height * sizeof(float));
+	if(yf_cos_cache == NULL) return buffer;
+
+	buildCosCache(xComponents,width,xf_cos_cache);
+	buildCosCache(yComponents,height,yf_cos_cache);
+
+	uint8_t* restrict rgb_ptr = rgb;
+	for (size_t y = 0; y < height; ++y)
+    {
+        for (size_t x = 0; x < width; ++x)
+        {
+            float r = srgb_to_linear_table[rgb_ptr[0]];
+			float g = srgb_to_linear_table[rgb_ptr[1]];
+			float b = srgb_to_linear_table[rgb_ptr[2]];
+
+            rgb_ptr += 4;
+
+            float * restrict factor_ptr = factors;
+            for (size_t yc = 0; yc < yComponents; ++yc)
+            {
+                for (size_t xc = 0; xc < xComponents; ++xc)
+                {
+                    float basis = xf_cos_cache[x * xComponents + xc] * yf_cos_cache[y * yComponents + yc];
+
+					
+					factor_ptr[0] += r * basis;
+					factor_ptr[1] += g * basis;
+					factor_ptr[2] += b * basis;
+
+					factor_ptr += 3;
+                }
+            }
+        }
+    }
+
+	{
+		// normalization step, before optimization it placed in the end of
+		// multiplyBasisFunction
+		float * restrict factor_ptr = factors;
+		for (size_t yc = 0; yc < yComponents; yc++)
+		{
+			for (size_t xc = 0; xc < xComponents; xc++)
+			{
+				float normalisation = (xc == 0 && yc == 0) ? 1 : 2;
+				float scale = normalisation / (width * height);
+
+				factor_ptr[0] *= scale;
+				factor_ptr[1] *= scale;
+				factor_ptr[2] *= scale;
+
+				factor_ptr += 3;
+			}
 		}
 	}
+
 
 	float *dc = &factors[0];
 	float *ac = dc + 3;
@@ -79,6 +142,8 @@ const char *blurHashForPixels(int xComponents, int yComponents, int width, int h
 
 	*ptr = 0;
 
+	free(xf_cos_cache);
+	free(yf_cos_cache);
 	free(factors);
 
 	return buffer;

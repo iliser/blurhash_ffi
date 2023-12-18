@@ -186,15 +186,10 @@ class BlurhashFFI {
         return;
       }
       final Uint8List list = bytes.buffer.asUint8List();
-      final rgbBytes = Uint8List(list.length ~/ 4 * 3);
-      for (var i = 0, j = 0; i < list.length; i += 4, j += 3) {
-        rgbBytes[j] = list[i];
-        rgbBytes[j + 1] = list[i + 1];
-        rgbBytes[j + 2] = list[i + 2];
-      }
+
       if (!completer.isCompleted) {
         completer.complete(BlurHashImageInfo(imageInfo.image.height,
-            imageInfo.image.width, imageInfo.image.width * 3, rgbBytes));
+            imageInfo.image.width, imageInfo.image.width * 4, list));
       }
     }, onError: (dynamic exception, StackTrace? stackTrace) {
       completer.completeError(exception, stackTrace);
