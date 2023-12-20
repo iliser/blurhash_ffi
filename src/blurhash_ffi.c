@@ -203,10 +203,10 @@ static char *encode_int(int value, int length, char *destination) {
 	return destination;
 }
 
-static inline uint8_t clampToUByte(int * src) {
-	if( *src >= 0 && *src <= 255 )
-		return *src;
-	return (*src < 0) ? 0 : 255;
+static inline uint8_t clampToUByte(int src) {
+	if(src < 0)return 0;
+	if(src > 255)return 255;
+	return src;
 }
 
 static inline uint8_t *  createByteArray(int size) {
@@ -264,9 +264,8 @@ int decodeToArray(const char * blurhash, int width, int height, int punch, int n
 	if (punch < 1) punch = 1;
 
 	int sizeFlag = decodeToInt(blurhash, 0, 1);
-	int numY = (int)floorf(sizeFlag / 9) + 1;
-	int numX = (sizeFlag % 9) + 1;
-	int iter = 0;
+	size_t yComponents = (int)floorf(sizeFlag / 9) + 1;
+	size_t xComponents = (sizeFlag % 9) + 1;
 
 	float r = 0, g = 0, b = 0;
 	int quantizedMaxValue = decodeToInt(blurhash, 1, 2);
@@ -274,15 +273,31 @@ int decodeToArray(const char * blurhash, int width, int height, int punch, int n
 
 	float maxValue = ((float)(quantizedMaxValue + 1)) / 166;
 
-	int colors_size = numX * numY;
-	float *colors = malloc(colors_size * 3 * sizeof(float));
-	if(colors == NULL) return -1;
+	int colors_size = xComponents * yComponents;
+	
+	// buffer that contains all arrays used in this function
+	// single buffer used to simplify memory dealocation in error cases
+	float * internal_buffer = (float *)malloc(
+		colors_size * 3 * sizeof(float)
+		+ xComponents * width * sizeof(float)
+		+ yComponents * height * sizeof(float)
+	);
+	if(internal_buffer == NULL)return -1;
+	
+	
+	float * restrict colors = (internal_buffer + 0);
+	float * restrict xf_cos_cache = (internal_buffer + colors_size * 3);
+	float * restrict yf_cos_cache = (internal_buffer + colors_size * 3 + xComponents * width);
+	
+	buildCosCache(xComponents,width,xf_cos_cache);
+	buildCosCache(yComponents,height,yf_cos_cache);
 
-	for(iter = 0; iter < colors_size; iter ++) {
+
+	for(size_t iter = 0; iter < colors_size; iter ++) {
 		if (iter == 0) {
 			int value = decodeToInt(blurhash, 2, 6);
 			if (value == -1) {
-				free(colors);
+				free(internal_buffer);
 				return -1;
 			}
 			decodeDC(value, &r, &g, &b);
@@ -293,7 +308,7 @@ int decodeToArray(const char * blurhash, int width, int height, int punch, int n
 		} else {
 			int value = decodeToInt(blurhash, 4 + iter * 2, 6 + iter * 2);
 			if (value == -1) {
-				free(colors);
+				free(internal_buffer);
 				return -1;
 			}
 			decodeAC(value, maxValue * punch, &r, &g, &b);
@@ -302,64 +317,38 @@ int decodeToArray(const char * blurhash, int width, int height, int punch, int n
 			colors[iter * 3 + 2] = b;
 		}
 	}
-	int bytesPerRow = width * nChannels;
-	int x = 0, y = 0, i = 0, j = 0;
-	int intR = 0, intG = 0, intB = 0;
-
-
-	size_t xComponents = numX;
-	size_t yComponents = numY;
-	float * restrict xf_cos_cache = (float *)malloc(xComponents * width * sizeof(float));
-	if(xf_cos_cache == NULL) return buffer;
-	float * restrict yf_cos_cache = (float *)malloc(yComponents * height * sizeof(float));
-	if(yf_cos_cache == NULL) return buffer;
-
-	buildCosCache(xComponents,width,xf_cos_cache);
-	buildCosCache(yComponents,height,yf_cos_cache);
 
 	uint8_t * restrict pixel_ptr = pixelArray;
-	for(y = 0; y < height; y ++) {
-		for(x = 0; x < width; x ++) {
+	for(size_t y = 0; y < height; ++y) {
+		for(size_t x = 0; x < width; ++x) {
 
 			float r = 0, g = 0, b = 0;
 
 			float * restrict color_ptr = colors;
-			for(j = 0; j < numY; j ++) {
-				for(i = 0; i < numX; i ++) {
-					float basis = xf_cos_cache[x * xComponents + i] + yf_cos_cache[y * yComponents + j];
-					// float basics = cos((M_PI * x * i) / width) * cos((M_PI * y * j) / height);
-					// int idx = i + j * numX;
-					r += color_ptr[0] * basics;
-					g += color_ptr[1] * basics;
-					b += color_ptr[2] * basics;
+			for(size_t yc = 0; yc < yComponents; ++yc) {
+				for(size_t xc = 0; xc < xComponents; ++xc) {
+					float basis = xf_cos_cache[x * xComponents + xc] * yf_cos_cache[y * yComponents + yc];
+
+					r += color_ptr[0] * basis;
+					g += color_ptr[1] * basis;
+					b += color_ptr[2] * basis;
 
 					color_ptr += 3;
 				}
 			}
-
-			intR = linearTosRGB(r);
-			intG = linearTosRGB(g);
-			intB = linearTosRGB(b);
 			
-			pixel_ptr[0] = clampToUByte(&intR);
-			pixel_ptr[1] = clampToUByte(&intG);
-			pixel_ptr[2] = clampToUByte(&intB);
+			pixel_ptr[0] = clampToUByte(linearTosRGB(r));
+			pixel_ptr[1] = clampToUByte(linearTosRGB(g));
+			pixel_ptr[2] = clampToUByte(linearTosRGB(b));
 			
 			if (nChannels == 4)
 				pixel_ptr[3] = 255;   // If nChannels=4, treat each pixel as RGBA instead of RGB
 			
 			pixel_ptr += nChannels;
-
-			// pixelArray[nChannels * x + 0 + y * bytesPerRow] = clampToUByte(&intR);
-			// pixelArray[nChannels * x + 1 + y * bytesPerRow] = clampToUByte(&intG);
-			// pixelArray[nChannels * x + 2 + y * bytesPerRow] = clampToUByte(&intB);
-
-			
-
 		}
 	}
 
-	free(colors);
+	free(internal_buffer);
 
 	return 0;
 }
