@@ -306,31 +306,55 @@ int decodeToArray(const char * blurhash, int width, int height, int punch, int n
 	int x = 0, y = 0, i = 0, j = 0;
 	int intR = 0, intG = 0, intB = 0;
 
+
+	size_t xComponents = numX;
+	size_t yComponents = numY;
+	float * restrict xf_cos_cache = (float *)malloc(xComponents * width * sizeof(float));
+	if(xf_cos_cache == NULL) return buffer;
+	float * restrict yf_cos_cache = (float *)malloc(yComponents * height * sizeof(float));
+	if(yf_cos_cache == NULL) return buffer;
+
+	buildCosCache(xComponents,width,xf_cos_cache);
+	buildCosCache(yComponents,height,yf_cos_cache);
+
+	uint8_t * restrict pixel_ptr = pixelArray;
 	for(y = 0; y < height; y ++) {
 		for(x = 0; x < width; x ++) {
 
 			float r = 0, g = 0, b = 0;
 
+			float * restrict color_ptr = colors;
 			for(j = 0; j < numY; j ++) {
 				for(i = 0; i < numX; i ++) {
-					float basics = cos((M_PI * x * i) / width) * cos((M_PI * y * j) / height);
-					int idx = i + j * numX;
-					r += colors[idx * 3 + 0] * basics;
-					g += colors[idx * 3 + 1] * basics;
-					b += colors[idx * 3 + 2] * basics;
+					float basis = xf_cos_cache[x * xComponents + i] + yf_cos_cache[y * yComponents + j];
+					// float basics = cos((M_PI * x * i) / width) * cos((M_PI * y * j) / height);
+					// int idx = i + j * numX;
+					r += color_ptr[0] * basics;
+					g += color_ptr[1] * basics;
+					b += color_ptr[2] * basics;
+
+					color_ptr += 3;
 				}
 			}
 
 			intR = linearTosRGB(r);
 			intG = linearTosRGB(g);
 			intB = linearTosRGB(b);
-
-			pixelArray[nChannels * x + 0 + y * bytesPerRow] = clampToUByte(&intR);
-			pixelArray[nChannels * x + 1 + y * bytesPerRow] = clampToUByte(&intG);
-			pixelArray[nChannels * x + 2 + y * bytesPerRow] = clampToUByte(&intB);
-
+			
+			pixel_ptr[0] = clampToUByte(&intR);
+			pixel_ptr[1] = clampToUByte(&intG);
+			pixel_ptr[2] = clampToUByte(&intB);
+			
 			if (nChannels == 4)
-				pixelArray[nChannels * x + 3 + y * bytesPerRow] = 255;   // If nChannels=4, treat each pixel as RGBA instead of RGB
+				pixel_ptr[3] = 255;   // If nChannels=4, treat each pixel as RGBA instead of RGB
+			
+			pixel_ptr += nChannels;
+
+			// pixelArray[nChannels * x + 0 + y * bytesPerRow] = clampToUByte(&intR);
+			// pixelArray[nChannels * x + 1 + y * bytesPerRow] = clampToUByte(&intG);
+			// pixelArray[nChannels * x + 2 + y * bytesPerRow] = clampToUByte(&intB);
+
+			
 
 		}
 	}
